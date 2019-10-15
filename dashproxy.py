@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 
 import os.path
+import os
+import errno
 
 import time
 import logging
@@ -48,6 +50,16 @@ def baseUrl(url):
         return url[:idx+1]
     else:
         return url
+
+def mkdir_p(path):
+    try:
+        os.makedirs(path)
+    except OSError as exc:  # Python >2.5
+        if exc.errno == errno.EEXIST and os.path.isdir(path):
+            pass
+        else:
+            return False
+    return True
 
 class RepAddr(object):
     def __init__(self, period_idx, adaptation_set_idx, representation_idx):
@@ -277,10 +289,14 @@ class DashDownloader(HasLogger):
 	return os.path.isfile(dest)
 
     def write(self, dest, content):
-        dest = os.path.join(self.proxy.output_dir, dest)
-        f = open(dest, 'wb')
-        f.write(content)
-        f.close()
+	absolute_file_path = os.path.join(self.proxy.output_dir, dest)
+	absolute_dir_path = os.path.dirname(os.path.abspath(absolute_file_path))
+	if mkdir_p(absolute_dir_path):
+            f = open(absolute_file_path, 'wb')
+            f.write(content)
+            f.close()
+	else:
+	    self.error('Cannot create output folder: %s' % (absolute_dir_path))
 
 
 def run(args):
