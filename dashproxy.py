@@ -233,6 +233,10 @@ class DashDownloader(HasLogger):
 
     def download_template(self, template, representation=None, segment=None):
         dest = self.render_template(template, representation, segment)
+        if self.file_exists(dest):
+	    self.error('file %s exists' % (dest))
+	    return
+
         dest_url = self.full_url(dest)
         self.info('requesting %s from %s' % (dest, dest_url))
         r = requests.get(dest_url)
@@ -259,6 +263,11 @@ class DashDownloader(HasLogger):
 
     def full_url(self, dest):
         return self.mpd_base_url + dest # TODO remove hardcoded arrd
+
+    def file_exists(self, dest):
+        dest = dest[0:dest.rfind('?')]
+        dest = os.path.join(self.proxy.output_dir, dest)
+	return os.path.isfile(dest)
 
     def write(self, dest, content):
         dest = dest[0:dest.rfind('?')]
