@@ -233,15 +233,16 @@ class DashDownloader(HasLogger):
 
     def download_template(self, template, representation=None, segment=None):
         dest = self.render_template(template, representation, segment)
-        if self.file_exists(dest):
-	    self.error('file %s exists' % (dest))
+	relative_file_path = self.get_relative_file_path(dest)
+        if self.file_exists(relative_file_path):
+	    self.error('file %s exists' % (relative_file_path))
 	    return
 
         dest_url = self.full_url(dest)
         self.info('requesting %s from %s' % (dest, dest_url))
         r = requests.get(dest_url)
         if r.status_code >= 200 and r.status_code < 300:
-            self.write(dest, r.content)
+            self.write(relative_file_path, r.content)
 
         else:
             self.error('cannot download %s server returned %d' % (dest_url, r.status_code))
@@ -261,16 +262,21 @@ class DashDownloader(HasLogger):
         template = template.format(**args)
         return template
 
+    def get_relative_file_path(self, dest):
+	query_part_start_pos = dest.rfind('?')
+	if query_part_start_pos != -1:
+	    dest = dest[0:query_part_start_pos]
+
+	return dest
+
     def full_url(self, dest):
         return self.mpd_base_url + dest # TODO remove hardcoded arrd
 
     def file_exists(self, dest):
-        dest = dest[0:dest.rfind('?')]
         dest = os.path.join(self.proxy.output_dir, dest)
 	return os.path.isfile(dest)
 
     def write(self, dest, content):
-        dest = dest[0:dest.rfind('?')]
         dest = os.path.join(self.proxy.output_dir, dest)
         f = open(dest, 'wb')
         f.write(content)
