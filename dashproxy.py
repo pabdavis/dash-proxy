@@ -111,7 +111,7 @@ class HasLogger(object):
 class DashProxy(HasLogger):
     retry_interval = 10
 
-    def __init__(self, mpd, output_dir, download, save_mpds=False):
+    def __init__(self, mpd, output_dir, download, mime_type, save_mpds=False):
         self.logger = logger
 
         self.mpd = mpd
@@ -119,6 +119,7 @@ class DashProxy(HasLogger):
         self.download = download
         self.save_mpds = save_mpds
         self.i_refresh = 0
+        self.mime_type = mime_type
 
         self.downloaders = {}
 
@@ -161,6 +162,9 @@ class DashProxy(HasLogger):
         logger.log(logging.VERBOSE, 'Found %d periods choosing the 1st one' % (len(periods),))
         period = periods[0]
         for as_idx, adaptation_set in enumerate( period.findall('mpd:AdaptationSet', ns) ):
+            if self.mime_type != "":
+                if self.mime_type != adaptation_set.attrib.get('mimeType', ''):
+                    continue;
             for rep_idx, representation in enumerate( adaptation_set.findall('mpd:Representation', ns) ):
                 self.verbose('Found representation with id %s' % (representation.attrib.get('id', 'UKN'),))
                 rep_addr = RepAddr(0, as_idx, rep_idx)
@@ -304,6 +308,7 @@ def run(args):
     proxy = DashProxy(mpd=args.mpd,
                   output_dir=args.o,
                   download=args.d,
+                  mime_type=args.m,
                   save_mpds=args.save_individual_mpds)
     return proxy.run()
 
@@ -313,6 +318,7 @@ def main():
     parser.add_argument("-v", action="store_true")
     parser.add_argument("-d", action="store_true")
     parser.add_argument("-o", default='.')
+    parser.add_argument("-m", default='')
     parser.add_argument("--save-individual-mpds", action="store_true")
     args = parser.parse_args()
 
