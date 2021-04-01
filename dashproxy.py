@@ -19,6 +19,34 @@ logger = logging.getLogger('dash-proxy')
 
 ns = {'mpd':'urn:mpeg:dash:schema:mpd:2011'}
 
+import datetime
+
+
+def get_isosplit(s, split):
+    if split in s:
+        n, s = s.split(split)
+    else:
+        n = 0
+    return n, s
+
+
+def parse_isoduration(s):
+
+    # Remove prefix
+    s = s.split('P')[-1]
+
+    # Step through letter dividers
+    days, s = get_isosplit(s, 'D')
+    _, s = get_isosplit(s, 'T')
+    hours, s = get_isosplit(s, 'H')
+    minutes, s = get_isosplit(s, 'M')
+    seconds, s = get_isosplit(s, 'S')
+    milliseconds, s = get_isosplit(s, '.')
+
+    # Convert all to seconds
+    dt = datetime.timedelta(days=int(days), hours=int(hours), minutes=int(minutes), seconds=float(seconds), milliseconds=int(milliseconds))
+    return float(dt.total_seconds())
+
 
 class Formatter(logging.Formatter):
     def __init__(self, fmt=None, datefmt=None):
@@ -84,6 +112,9 @@ class MpdLocator(object):
             return rep_st
         else:
             return self.adaptation_set(rep_addr).find('mpd:SegmentTemplate', ns)
+
+    def segment_template_from_adapt(self, rep_addr):
+        return self.adaptation_set(rep_addr).find('mpd:SegmentTemplate', ns)
 
     def segment_timeline(self, rep_addr):
         return self.segment_template(rep_addr).find('mpd:SegmentTimeline', ns)
@@ -215,8 +246,14 @@ class DashDownloader(HasLogger):
         self.mpd_base_url = base_url
         self.mpd = MpdLocator(mpd)
 
+        self.mediaPresentationDuration = mpd.attrib.get('mediaPresentationDuration', '')
+        self.info('mediaPresentationDuration %s' % (self.mediaPresentationDuration))
+        self.mediaPresentationDurationInSec = parse_isoduration(self.mediaPresentationDuration)
+        self.info('mediaPresentationDuration %f [s]' % (self.mediaPresentationDurationInSec))
+
         rep = self.mpd.representation(self.rep_addr)
         segment_template = self.mpd.segment_template(self.rep_addr)
+        segment_template_from_adapt = self.mpd.segment_template_from_adapt(self.rep_addr)
         segment_timeline = self.mpd.segment_timeline(self.rep_addr)
 
         initialization_template = segment_template.attrib.get('initialization', '')
@@ -224,42 +261,82 @@ class DashDownloader(HasLogger):
             self.initialization_downloaded = True
             self.download_template(initialization_template, rep)
 
-        segments = copy.deepcopy(segment_timeline.findall('mpd:S', ns))
-        idx = 0
-        for segment in segments:
-            duration = int( segment.attrib.get('d', '0') )
-            repeat = int( segment.attrib.get('r', '0') )
-            idx = idx + 1
-            for _ in range(0, repeat):
-                elem = xml.etree.ElementTree.Element('{urn:mpeg:dash:schema:mpd:2011}S', attrib={'d':duration})
-                segment_timeline.insert(idx, elem)
-                self.verbose('appding a new elem')
+        if segment_timeline is not None:
+            segments = copy.deepcopy(segment_timeline.findall('mpd:S', ns))
+            idx = 0
+            for segment in segments:
+                duration = int( segment.attrib.get('d', '0') )
+                repeat = int( segment.attrib.get('r', '0') )
                 idx = idx + 1
+                for _ in range(0, repeat):
+                    elem = xml.etree.ElementTree.Element('{urn:mpeg:dash:schema:mpd:2011}S', attrib={'d':duration})
+                    segment_timeline.insert(idx, elem)
+                    self.verbose('appding a new elem')
+                    idx = idx + 1
 
-        media_template = segment_template.attrib.get('media', '')
-        next_time = 0
-        for segment in segment_timeline.findall('mpd:S', ns):
-            current_time = int(segment.attrib.get('t', '-1'))
-            if current_time == -1:
-                segment.attrib['t'] = next_time
-            else:
-                next_time = current_time
-            next_time += int(segment.attrib.get('d', '0'))
-            self.download_template(media_template, rep, segment)
+            media_template = segment_template.attrib.get('media', '')
+            next_time = 0
+            for segment in segment_timeline.findall('mpd:S', ns):
+                current_time = int(segment.attrib.get('t', '-1'))
+                if current_time == -1:
+                    segment.attrib['t'] = next_time
+                else:
+                    next_time = current_time
+                next_time += int(segment.attrib.get('d', '0'))
+                self.download_template(media_template, rep, segment)
+        else:
+            media_template = segment_template.attrib.get('media', '')
+            media_template = media_template.replace('$RepresentationID$', '{representation_id}')
+            media_template = media_template.replace('$Bandwidth$', '{bandwidth}')
+
+            args = {}
+            if rep is not None:
+                args['representation_id'] = rep.attrib.get('id', '')
+                args['bandwidth'] = rep.attrib.get('bandwidth', '')
+
+            media_template = media_template.format(**args)
+
+            # replace $Number$ with appropriate numbers
+            media_template = media_template.replace("$", "{", 1)
+            media_template = media_template.replace("$", "}", 1)
+            media_template = media_template.replace("%", ":", 1)
+
+            fTimescale = (int)(segment_template_from_adapt.attrib.get('timescale', '1'))
+            fDuration = (int)(segment_template_from_adapt.attrib.get('duration', '1'))
+            fStartNumber = (int)(segment_template_from_adapt.attrib.get('startNumber', '1'))
+            if segment_template is not None:
+                fTimescale = (int)(segment_template.attrib.get('timescale', fTimescale))
+                fDuration = (int)(segment_template.attrib.get('duration', fDuration))
+                fStartNumber = (int)(segment_template.attrib.get('startNumber', fStartNumber))
+
+            fDurationInSec = (int)(fDuration)/(int)(fTimescale)
+            fNumbers = (int)(self.mediaPresentationDurationInSec/fDurationInSec)
+
+            self.info('fStartNumber: %d, fNumbers %d' % (fStartNumber, fNumbers))
+            for index in range(fStartNumber, fNumbers+1):
+                dest = media_template.format(Number = index)
+                dest_url = self.full_url(dest)
+
+                self.info('requesting %s from %s' % (dest, dest_url))
+                r = requests.get(dest_url)
+                if r.status_code >= 200 and r.status_code < 300:
+                    self.write(dest, r.content)
+                else:
+                    self.error('cannot download %s server returned %d' % (dest_url, r.status_code))
+
 
     def download_template(self, template, representation=None, segment=None):
         dest = self.render_template(template, representation, segment)
-	relative_file_path = self.get_relative_file_path(dest)
+        relative_file_path = self.get_relative_file_path(dest)
         if self.file_exists(relative_file_path):
-	    self.error('file %s exists' % (relative_file_path))
-	    return
+            self.error('file %s exists' % (relative_file_path))
+            return
 
         dest_url = self.full_url(dest)
         self.info('requesting %s from %s' % (dest, dest_url))
         r = requests.get(dest_url)
         if r.status_code >= 200 and r.status_code < 300:
             self.write(relative_file_path, r.content)
-
         else:
             self.error('cannot download %s server returned %d' % (dest_url, r.status_code))
 
@@ -279,28 +356,28 @@ class DashDownloader(HasLogger):
         return template
 
     def get_relative_file_path(self, dest):
-	query_part_start_pos = dest.rfind('?')
-	if query_part_start_pos != -1:
-	    dest = dest[0:query_part_start_pos]
+        query_part_start_pos = dest.rfind('?')
+        if query_part_start_pos != -1:
+            dest = dest[0:query_part_start_pos]
 
-	return dest
+        return dest
 
     def full_url(self, dest):
         return self.mpd_base_url + dest # TODO remove hardcoded arrd
 
     def file_exists(self, dest):
         dest = os.path.join(self.proxy.output_dir, dest)
-	return os.path.isfile(dest)
+        return os.path.isfile(dest)
 
     def write(self, dest, content):
-	absolute_file_path = os.path.join(self.proxy.output_dir, dest)
-	absolute_dir_path = os.path.dirname(os.path.abspath(absolute_file_path))
-	if mkdir_p(absolute_dir_path):
+        absolute_file_path = os.path.join(self.proxy.output_dir, dest)
+        absolute_dir_path = os.path.dirname(os.path.abspath(absolute_file_path))
+        if mkdir_p(absolute_dir_path):
             f = open(absolute_file_path, 'wb')
             f.write(content)
             f.close()
-	else:
-	    self.error('Cannot create output folder: %s' % (absolute_dir_path))
+        else:
+            self.error('Cannot create output folder: %s' % (absolute_dir_path))
 
 
 def run(args):
