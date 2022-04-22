@@ -103,6 +103,9 @@ class MpdLocator(object):
     def __init__(self, mpd):
         self.mpd = mpd
 
+    def base_url(self, rep_addr):
+        return self.representation(rep_addr).find("mpd:BaseURL", ns)
+
     def representation(self, rep_addr):
         return self.adaptation_set(rep_addr).findall('mpd:Representation', ns)[rep_addr.representation_idx]
 
@@ -242,6 +245,18 @@ class DashDownloader(HasLogger):
 
         self.initialization_downloaded = False
 
+    def download_single(self, rep_addr):
+        dest = self.mpd.base_url(self.rep_addr).text
+        dest_url = self.full_url(dest)
+        self.info("download_single requesting %s from %s" % (dest, dest_url))
+        r = requests.get(dest_url)
+        if r.status_code >= 200 and r.status_code < 300:
+            self.write(dest, r.content)
+        else:
+            self.error(
+                "cannot download %s server returned %d" % (dest_url, r.status_code)
+            )
+
     def handle_mpd(self, mpd, base_url):
         self.mpd_base_url = base_url
         self.mpd = MpdLocator(mpd)
@@ -253,6 +268,11 @@ class DashDownloader(HasLogger):
 
         rep = self.mpd.representation(self.rep_addr)
         segment_template = self.mpd.segment_template(self.rep_addr)
+
+        if segment_template is None:
+            self.download_single(self.rep_addr)
+            return
+
         segment_template_from_adapt = self.mpd.segment_template_from_adapt(self.rep_addr)
         segment_timeline = self.mpd.segment_timeline(self.rep_addr)
 
