@@ -321,9 +321,14 @@ class DashDownloader(HasLogger):
             media_template = media_template.replace("$", "}", 1)
             media_template = media_template.replace("%", ":", 1)
 
-            fTimescale = (int)(segment_template_from_adapt.attrib.get('timescale', '1'))
-            fDuration = (int)(segment_template_from_adapt.attrib.get('duration', '1'))
-            fStartNumber = (int)(segment_template_from_adapt.attrib.get('startNumber', '1'))
+            fTimescale = 1
+            fDuration = 1
+            fStartNumber = 1
+            if segment_template_from_adapt is not None:
+                fTimescale = (int)(segment_template_from_adapt.attrib.get('timescale', fTimescale))
+                fDuration = (int)(segment_template_from_adapt.attrib.get('duration', fDuration))
+                fStartNumber = (int)(segment_template_from_adapt.attrib.get('startNumber', fStartNumber))
+
             if segment_template is not None:
                 fTimescale = (int)(segment_template.attrib.get('timescale', fTimescale))
                 fDuration = (int)(segment_template.attrib.get('duration', fDuration))
